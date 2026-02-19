@@ -1,3 +1,5 @@
+using Cortex.Mediator.DependencyInjection;
+using Harmony.Application.Contract.Requests;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
@@ -155,6 +157,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         };
     });
 
+builder.Services.AddCortexMediator(
+    new[] { typeof(Program), typeof(AddPostHandler), typeof(AddPostDto) },
+    options => options.AddDefaultBehaviors());
 
 
 var app = builder.Build();
