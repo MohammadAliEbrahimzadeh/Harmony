@@ -8,11 +8,13 @@ public class DtoInfo
     public string Name { get; set; } = "";
     public List<PropertyInfo2> Properties { get; set; } = new();
 }
+
 public class PropertyInfo2
 {
     public string Name { get; set; } = "";
     public string Type { get; set; } = "";
 }
+
 public class CallNode
 {
     public int Order { get; set; }
@@ -23,6 +25,7 @@ public class CallNode
     public DtoInfo? Accepts { get; set; }
     public DtoInfo? Returns { get; set; }
 }
+
 public class EndpointAnalysis
 {
     public string HttpMethod { get; set; } = "";
@@ -34,6 +37,7 @@ public class EndpointAnalysis
     public DtoInfo? ResponseBody { get; set; }
     public List<CallNode> CallFlow { get; set; } = new();
 }
+
 public class RichApiAnalyzer
 {
     private readonly AssemblyDefinition _assembly;
@@ -53,7 +57,6 @@ public class RichApiAnalyzer
         _assembly = AssemblyDefinition.ReadAssembly(assemblyPath, _readerParams);
         _rootAssemblyName = _assembly.Name.Name;
         // If you know your root namespace, set it explicitly instead of guessing.
-        // Common heuristic: take the namespace prefix from the first controller type.
         _rootNamespace = "Harmony.Api.Controllers"; // TODO: replace
     }
 
@@ -77,45 +80,6 @@ public class RichApiAnalyzer
         return endpoints;
     }
 
-    private bool IsUserCode(TypeReference? declaringType)
-    {
-        if (declaringType == null) return false;
-        try
-        {
-            var resolved = declaringType.Resolve();
-            if (resolved == null) return false;
-            var asm = resolved.Module?.Assembly?.Name?.Name;
-            if (asm != _rootAssemblyName) return false;
-            // Allow compiler-generated async state machines (<Test>d__2) that are still in your assembly
-            // (No name-based rejection here.)
-            return true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private bool IsFrameworkNoise(TypeReference? type)
-    {
-        if (type == null) return false;
-        var n = type.FullName ?? type.Name;
-        return n.StartsWith("System.", StringComparison.Ordinal) ||
-                   n.StartsWith("Microsoft.", StringComparison.Ordinal) ||
-                   n.Contains("AsyncTaskMethodBuilder", StringComparison.Ordinal) ||
-                   n.Contains("IAsyncStateMachine", StringComparison.Ordinal) ||
-                   n.Contains("ExecutionContext", StringComparison.Ordinal) ||
-                   n.Contains("ThrowHelper", StringComparison.Ordinal) ||
-                   n.Contains("TaskScheduler", StringComparison.Ordinal) ||
-                   n.Contains("Thread", StringComparison.Ordinal);
-    }
-
-
-
-
-
-
-    // Optional compatibility API: analyze one specific controller/action by type+name
     public EndpointAnalysis? AnalyzeEndpoint(Type controllerType, string actionName, bool includeCallFlow = true)
     {
         var typeDef = _assembly.MainModule.Types
@@ -125,12 +89,12 @@ public class RichApiAnalyzer
         if (method == null) return null;
         return AnalyzeAction(typeDef, method, includeCallFlow);
     }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Controller/action discovery (Swagger-like core)
     // ─────────────────────────────────────────────────────────────────────────────
     private EndpointAnalysis? AnalyzeAction(TypeDefinition controllerType, MethodDefinition actionMethod, bool includeCallFlow)
     {
-        // Basic route + verb
         var route = BuildRoute(controllerType, actionMethod);
         var httpMethod = GetHttpMethod(actionMethod);
         var analysis = new EndpointAnalysis
@@ -140,45 +104,46 @@ public class RichApiAnalyzer
             HttpMethod = httpMethod,
             Route = route,
             RequiresAuthentication = HasAttribute(controllerType, "AuthorizeAttribute") ||
-                                             HasAttribute(actionMethod, "AuthorizeAttribute"),
+                                     HasAttribute(actionMethod, "AuthorizeAttribute"),
             RequestBody = ExtractRequestBodyDto(actionMethod),
             ResponseBody = ExtractResponseDto(actionMethod.ReturnType)
         };
         if (includeCallFlow)
-            analysis.CallFlow = BuildCallFlow(actionMethod);
+        {
+            int order = 1;
+            var visited = new HashSet<string>();
+            analysis.CallFlow = BuildCallFlow(actionMethod, visited, ref order);
+        }
         return analysis;
     }
+
     private static string NormalizeControllerName(string typeName)
     {
-        // "WeatherForecastController" => "WeatherForecast"
         return typeName.Replace("Controller", "");
     }
+
     private bool IsApiController(TypeDefinition typeDef)
     {
-        // Option 1: [ApiController]
         var hasApiControllerAttr = typeDef.CustomAttributes.Any(a =>
             a.AttributeType.FullName == "Microsoft.AspNetCore.Mvc.ApiControllerAttribute" ||
             a.AttributeType.Name == "ApiControllerAttribute");
-        // Option 2: inherits ControllerBase/Controller
         var baseType = typeDef.BaseType?.FullName;
         var inheritsControllerBase =
             baseType == "Microsoft.AspNetCore.Mvc.ControllerBase" ||
             baseType == "Microsoft.AspNetCore.Mvc.Controller";
         return hasApiControllerAttr || inheritsControllerBase;
     }
+
     private bool IsHttpAction(MethodDefinition method)
     {
         var verbAttrs = new HashSet<string>
         {
-            "HttpGetAttribute",
-            "HttpPostAttribute",
-            "HttpPutAttribute",
-            "HttpDeleteAttribute",
-            "HttpPatchAttribute",
-            "HttpOptionsAttribute",
+            "HttpGetAttribute", "HttpPostAttribute", "HttpPutAttribute",
+            "HttpDeleteAttribute", "HttpPatchAttribute", "HttpOptionsAttribute",
         };
         return method.CustomAttributes.Any(a => verbAttrs.Contains(a.AttributeType.Name));
     }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Route + HTTP verb
     // ─────────────────────────────────────────────────────────────────────────────
@@ -192,15 +157,14 @@ public class RichApiAnalyzer
             return $"{controllerRoute}/{actionRoute}".TrimEnd('/');
         return controllerRoute;
     }
+
     private string? GetRouteTemplate(ICustomAttributeProvider provider)
     {
-        // Matches only [RouteAttribute] (best-effort MVP).
-        // You can expand later to check HttpGet("...") templates too.
         var attr = provider.CustomAttributes
             .FirstOrDefault(a => a.AttributeType.Name == "RouteAttribute");
-        // Common case: [Route("test")] => ctor arg string
         return attr?.ConstructorArguments.FirstOrDefault().Value as string;
     }
+
     private string GetHttpMethod(MethodDefinition method)
     {
         foreach (var attr in method.CustomAttributes)
@@ -215,53 +179,45 @@ public class RichApiAnalyzer
         }
         return "GET";
     }
-    // ─────────────────────────────────────────────────────────────────────────────
-    // Auth
-    // ─────────────────────────────────────────────────────────────────────────────
+
     private bool HasAttribute(ICustomAttributeProvider provider, string attrName) =>
             provider.CustomAttributes.Any(a => a.AttributeType.Name == attrName);
+
     // ─────────────────────────────────────────────────────────────────────────────
     // DTO extraction (best-effort)
     // ─────────────────────────────────────────────────────────────────────────────
     private DtoInfo? ExtractRequestBodyDto(MethodDefinition method)
     {
-        // MVP rules:
-        // - first parameter that is not CancellationToken
-        // - not primitive
-        // - not "simple" system types
-        // If you have [FromBody] later, we can prefer it.
         var requestParam = method.Parameters.FirstOrDefault(p =>
             !IsPrimitive(p.ParameterType) &&
             p.ParameterType.Name != "CancellationToken");
         if (requestParam == null) return null;
         return BuildDtoInfo(requestParam.ParameterType);
     }
+
     private DtoInfo? ExtractResponseDto(TypeReference returnType)
     {
         var typeRef = UnwrapTask(returnType);
-        // IActionResult / ActionResult — cannot know real T reliably
         if (typeRef.Name is "IActionResult" or "ActionResult")
             return new DtoInfo { Name = typeRef.Name };
-        // ActionResult<T> => unwrap T
         if (typeRef is GenericInstanceType art && art.Name.StartsWith("ActionResult"))
         {
             var inner = art.GenericArguments.FirstOrDefault();
             return inner != null ? BuildDtoInfo(inner) : null;
         }
-        // If response is still generic Task<...> we already unwrapped it above
         return BuildDtoInfo(typeRef);
     }
+
     private TypeReference UnwrapTask(TypeReference returnType)
     {
-        // Task<T> => T
         if (returnType is GenericInstanceType git && git.Name.StartsWith("Task"))
         {
             var inner = git.GenericArguments.FirstOrDefault();
             if (inner != null) return inner;
         }
-        // Task => keep as-is
         return returnType;
     }
+
     private DtoInfo BuildDtoInfo(TypeReference typeRef)
     {
         var dto = new DtoInfo { Name = typeRef.Name };
@@ -270,7 +226,7 @@ public class RichApiAnalyzer
         if (typeDef != null)
         {
             dto.Properties = typeDef.Properties
-                .Where(p => p.Name != "EqualityContract") // filter record artifact
+                .Where(p => p.Name != "EqualityContract")
                 .Select(p => new PropertyInfo2
                 {
                     Name = p.Name,
@@ -281,175 +237,279 @@ public class RichApiAnalyzer
         return dto;
     }
 
-    private void TryRecurseIntoMoveNext(
-    TypeReference stateMachineType,
-    List<CallNode> nodes,
-    HashSet<string> visited,
-    ref int order)
-    {
-        MethodDefinition? moveNext = null;
-        try
-        {
-            var def = stateMachineType.Resolve();
-            moveNext = def?.Methods.FirstOrDefault(m => m.Name == "MoveNext" && m.HasBody);
-        }
-        catch { }
-        if (moveNext == null) return;
-        // Use a key so you don't keep re-adding it
-        var key = $"{stateMachineType.FullName}.MoveNext";
-        if (!visited.Add(key)) return;
-        // Add a node for MoveNext
-        nodes.Add(new CallNode
-        {
-            Order = order++,
-            DeclaringType = stateMachineType.Name,
-            MethodName = "MoveNext",
-            Category = "Async",
-            Summary = $"State machine executes async body ({stateMachineType.Name}.MoveNext)"
-        });
-        // Now recurse into MoveNext's body
-        // (use Cecil MethodReference)
-        RecurseInto(moveNext, nodes, visited, ref order, depth: 1);
-    }
-
-
-    private static bool LooksLikeAsyncStateMachineType(TypeReference t)
-    {
-        var full = t.FullName ?? t.Name;
-        return full.Contains("d__") && full.Contains("<") && full.Contains(">");
-    }
-
-
     // ─────────────────────────────────────────────────────────────────────────────
-    // Call flow (optional enrichment, still best-effort)
+    // Call flow analysis with MediatR & Async support
     // ─────────────────────────────────────────────────────────────────────────────
-    private List<CallNode> BuildCallFlow(MethodDefinition method)
+
+    private List<CallNode> BuildCallFlow(MethodDefinition method, HashSet<string> visited, ref int order)
     {
         var nodes = new List<CallNode>();
-        if (!method.HasBody) return nodes;
-        int order = 1;
-        var visited = new HashSet<string>();
+
+        if (method == null || !method.HasBody) return nodes;
+
+        // Redirect Async Methods to their compiler-generated MoveNext method
+        var asyncAttr = method.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "AsyncStateMachineAttribute");
+        if (asyncAttr != null && asyncAttr.ConstructorArguments.Count > 0)
+        {
+            var stateMachineType = asyncAttr.ConstructorArguments[0].Value as TypeReference;
+            var resolvedStateMachine = stateMachineType?.Resolve();
+            var moveNextMethod = resolvedStateMachine?.Methods.FirstOrDefault(m => m.Name == "MoveNext");
+
+            if (moveNextMethod != null && moveNextMethod.HasBody)
+            {
+                method = moveNextMethod;
+            }
+        }
+
+        if (!visited.Add(method.FullName)) return nodes;
+
         foreach (var instr in method.Body.Instructions)
         {
-            if (instr.OpCode != OpCodes.Callvirt &&
-                instr.OpCode != OpCodes.Call &&
-                instr.OpCode != OpCodes.Newobj)
-                continue;
-            if (instr.Operand is not MethodReference calledMethod)
-                continue;
-            if (calledMethod.DeclaringType == null)
-                continue;
-            var declType = calledMethod.DeclaringType.Name;
-            var methodName = calledMethod.Name;
-            var key = $"{declType}.{methodName}";
-            if (!visited.Add(key))
-                continue;
-            // Skip noise
-            var isUser = IsUserCode(calledMethod.DeclaringType);
-            if (IsFrameworkNoise(calledMethod.DeclaringType))
-                continue;
-            // Always record the node
-            // (use isUser to decide recursion only)
-            var node = new CallNode
+            if (instr.OpCode.Code == Code.Call || instr.OpCode.Code == Code.Callvirt)
             {
-                Order = order++,
-                DeclaringType = declType,
-                MethodName = methodName,
-                Category = Categorize(declType, methodName),
-                Summary = BuildSummary(declType, methodName, calledMethod)
-            };
-
-            nodes.Add(node);
-            // Recurse only if it's user code
-            if (isUser && (instr.OpCode == OpCodes.Call || instr.OpCode == OpCodes.Callvirt))
-                RecurseInto(calledMethod, nodes, visited, ref order, depth: 1);
-            // Special async ctor/state machine handling can remain but should also key off isUser
-
-
-
-            // Accepts: attach first complex argument best-effort
-            if (calledMethod.HasParameters)
-            {
-                var firstComplex = calledMethod.Parameters
-                    .FirstOrDefault(p => !IsPrimitive(p.ParameterType) &&
-                                         p.ParameterType.Name != "CancellationToken");
-                if (firstComplex != null)
-                    node.Accepts = BuildDtoInfo(firstComplex.ParameterType);
-            }
-            // Returns: best-effort DTO for non-void
-            if (calledMethod.ReturnType != null && calledMethod.ReturnType.Name != "Void")
-                node.Returns = ExtractResponseDto(calledMethod.ReturnType);
-            nodes.Add(node);
-            // Recurse: include both call and callvirt (important)
-            if (IsUserCode(calledMethod.DeclaringType) && !IsFrameworkNoise(calledMethod.DeclaringType))
-            {
-                // your node creation...
-                // Special case: async state machine .ctor / initialization
-                if (calledMethod.Name is ".ctor" &&
-                    calledMethod.DeclaringType != null &&
-                    LooksLikeAsyncStateMachineType(calledMethod.DeclaringType))
+                if (instr.Operand is MethodReference calledMethodRef)
                 {
-                    // try to resolve and find MoveNext()
-                    TryRecurseIntoMoveNext(calledMethod.DeclaringType, nodes, visited, ref order);
+                    var calledMethod = calledMethodRef.Resolve();
+                    if (calledMethod == null) continue;
+
+                    string declType = calledMethod.DeclaringType?.Name ?? "Unknown";
+                    string methodName = calledMethod.Name;
+
+                    // Skip Noise
+                    if (IsFrameworkNoise(calledMethod.DeclaringType) || IsNoise(declType, methodName))
+                        continue;
+
+                    bool isUser = calledMethod.Module != null && calledMethod.Module.Name == _assembly.MainModule.Name;
+
+                    var node = new CallNode
+                    {
+                        Order = order++,
+                        DeclaringType = declType,
+                        MethodName = methodName,
+                        Category = Categorize(declType, methodName),
+                        Summary = BuildSummary(declType, methodName, calledMethod)
+                    };
+
+                    // --- MEDIATOR SUPPORT & EXACT DTO EXTRACTION ---
+                    if (declType.Contains("Mediator") && methodName.Contains("Send") && calledMethodRef is GenericInstanceMethod gim)
+                    {
+                        TypeReference? cmdType = null;
+                        TypeReference? resType = null;
+
+                        if (gim.GenericArguments.Count >= 2)
+                        {
+                            cmdType = gim.GenericArguments[0];
+                            resType = gim.GenericArguments[1];
+                        }
+                        else if (gim.GenericArguments.Count == 1)
+                        {
+                            // MediatR often infers the command type and only exposes the response type generically
+                            resType = gim.GenericArguments[0];
+                        }
+
+                        var handlerMethod = FindMediatorHandler(cmdType, resType);
+
+                        if (handlerMethod != null)
+                        {
+                            // Get the exact Input and Output from the concrete Handle method
+                            var actualCmd = handlerMethod.Parameters.FirstOrDefault(p => p.ParameterType.Name != "CancellationToken");
+                            if (actualCmd != null) node.Accepts = BuildDtoInfo(actualCmd.ParameterType);
+
+                            if (handlerMethod.ReturnType != null && handlerMethod.ReturnType.Name != "Task" && handlerMethod.ReturnType.Name != "Void")
+                                node.Returns = ExtractResponseDto(handlerMethod.ReturnType);
+
+                            nodes.Add(node);
+
+                            // Recurse directly into the concrete Handler
+                            RecurseInto(handlerMethod, nodes, visited, ref order, depth: 1);
+                            continue;
+                        }
+                    }
+
+                    // --- STANDARD EXTRACTION (Non-Mediator) ---
+                    if (calledMethod.HasParameters)
+                    {
+                        var firstComplex = calledMethod.Parameters
+                            .FirstOrDefault(p => !IsPrimitive(p.ParameterType) && p.ParameterType.Name != "CancellationToken");
+                        if (firstComplex != null) node.Accepts = BuildDtoInfo(firstComplex.ParameterType);
+                    }
+
+                    if (calledMethod.ReturnType != null && calledMethod.ReturnType.Name != "Void" && calledMethod.ReturnType.Name != "Task")
+                    {
+                        node.Returns = ExtractResponseDto(calledMethod.ReturnType);
+                    }
+
+                    nodes.Add(node);
+
+                    // Recurse into standard user code
+                    if (isUser && !declType.Contains("Mediator"))
+                    {
+                        RecurseInto(calledMethod, nodes, visited, ref order, depth: 1);
+                    }
                 }
-                // Normal recursion
-                if (instr.OpCode == OpCodes.Call || instr.OpCode == OpCodes.Callvirt)
-                    RecurseInto(calledMethod, nodes, visited, ref order, depth: 1);
             }
-
-
         }
+
         return nodes;
     }
-    private void RecurseInto(
-            MethodReference methodRef,
-            List<CallNode> nodes,
-            HashSet<string> visited,
-            ref int order,
-            int depth)
+
+    private void RecurseInto(MethodDefinition method, List<CallNode> nodes, HashSet<string> visited, ref int order, int depth)
     {
-        if (depth > 4) return;
-        MethodDefinition? def = null;
-        try { def = methodRef.Resolve(); } catch { }
-        if (def == null || !def.HasBody) return;
-        foreach (var instr in def.Body.Instructions)
+        if (depth >= 10 || method == null || !method.HasBody)
+            return;
+
+        // Redirect Async Methods to their compiler-generated MoveNext method
+        var asyncAttr = method.CustomAttributes.FirstOrDefault(a => a.AttributeType.Name == "AsyncStateMachineAttribute");
+        if (asyncAttr != null && asyncAttr.ConstructorArguments.Count > 0)
         {
-            if (instr.OpCode != OpCodes.Callvirt &&
-                instr.OpCode != OpCodes.Call)
-                continue;
-            if (instr.Operand is not MethodReference calledMethod)
-                continue;
-            if (calledMethod.DeclaringType == null)
-                continue;
-            var declType = calledMethod.DeclaringType.Name;
-            var methodName = calledMethod.Name;
-            var key = $"{declType}.{methodName}";
-            if (!visited.Add(key)) continue;
-            var isUser = IsUserCode(calledMethod.DeclaringType);
-            if (IsFrameworkNoise(calledMethod.DeclaringType))
-                continue;
-            // Record node regardless
-            nodes.Add(new CallNode
+            var stateMachineType = asyncAttr.ConstructorArguments[0].Value as TypeReference;
+            var resolvedStateMachine = stateMachineType?.Resolve();
+            var moveNextMethod = resolvedStateMachine?.Methods.FirstOrDefault(m => m.Name == "MoveNext");
+
+            if (moveNextMethod != null && moveNextMethod.HasBody)
             {
-                Order = order++,
-                DeclaringType = declType,
-                MethodName = methodName,
-                Category = Categorize(declType, methodName),
-                Summary = BuildSummary(declType, methodName, calledMethod)
-            });
-            // Recurse only if user code
-            if (isUser)
-                RecurseInto(calledMethod, nodes, visited, ref order, depth + 1);
+                method = moveNextMethod;
+            }
+        }
 
+        if (!visited.Add(method.FullName)) return;
 
+        foreach (var instr in method.Body.Instructions)
+        {
+            if (instr.OpCode.Code == Code.Call || instr.OpCode.Code == Code.Callvirt)
+            {
+                if (instr.Operand is MethodReference calledMethodRef)
+                {
+                    var calledMethod = calledMethodRef.Resolve();
+                    if (calledMethod == null) continue;
 
-       
-            RecurseInto(calledMethod, nodes, visited, ref order, depth + 1);
+                    string declType = calledMethod.DeclaringType?.Name ?? "Unknown";
+                    string methodName = calledMethod.Name;
+
+                    // Skip Noise
+                    if (IsFrameworkNoise(calledMethod.DeclaringType) || IsNoise(declType, methodName))
+                        continue;
+
+                    bool isUser = calledMethod.Module != null && calledMethod.Module.Name == _assembly.MainModule.Name;
+
+                    var node = new CallNode
+                    {
+                        Order = order++,
+                        DeclaringType = declType,
+                        MethodName = methodName,
+                        Category = Categorize(declType, methodName),
+                        Summary = BuildSummary(declType, methodName, calledMethod)
+                    };
+
+                    // --- MEDIATOR SUPPORT & EXACT DTO EXTRACTION ---
+                    if (declType.Contains("Mediator") && methodName.Contains("Send") && calledMethodRef is GenericInstanceMethod gim)
+                    {
+                        TypeReference? cmdType = null;
+                        TypeReference? resType = null;
+
+                        if (gim.GenericArguments.Count >= 2)
+                        {
+                            cmdType = gim.GenericArguments[0];
+                            resType = gim.GenericArguments[1];
+                        }
+                        else if (gim.GenericArguments.Count == 1)
+                        {
+                            resType = gim.GenericArguments[0];
+                        }
+
+                        var handlerMethod = FindMediatorHandler(cmdType, resType);
+
+                        if (handlerMethod != null)
+                        {
+                            var actualCmd = handlerMethod.Parameters.FirstOrDefault(p => p.ParameterType.Name != "CancellationToken");
+                            if (actualCmd != null) node.Accepts = BuildDtoInfo(actualCmd.ParameterType);
+
+                            if (handlerMethod.ReturnType != null && handlerMethod.ReturnType.Name != "Task" && handlerMethod.ReturnType.Name != "Void")
+                                node.Returns = ExtractResponseDto(handlerMethod.ReturnType);
+
+                            nodes.Add(node);
+
+                            RecurseInto(handlerMethod, nodes, visited, ref order, depth + 1);
+                            continue;
+                        }
+                    }
+
+                    // --- STANDARD EXTRACTION (Non-Mediator) ---
+                    if (calledMethod.HasParameters)
+                    {
+                        var firstComplex = calledMethod.Parameters
+                            .FirstOrDefault(p => !IsPrimitive(p.ParameterType) && p.ParameterType.Name != "CancellationToken");
+                        if (firstComplex != null) node.Accepts = BuildDtoInfo(firstComplex.ParameterType);
+                    }
+
+                    if (calledMethod.ReturnType != null && calledMethod.ReturnType.Name != "Void" && calledMethod.ReturnType.Name != "Task")
+                    {
+                        node.Returns = ExtractResponseDto(calledMethod.ReturnType);
+                    }
+
+                    nodes.Add(node);
+
+                    // Recurse into standard user code
+                    if (isUser && !declType.Contains("Mediator"))
+                    {
+                        RecurseInto(calledMethod, nodes, visited, ref order, depth + 1);
+                    }
+                }
+            }
         }
     }
+
+    private MethodDefinition? FindMediatorHandler(TypeReference? commandType, TypeReference? responseType)
+    {
+        foreach (var type in _assembly.MainModule.Types)
+        {
+            foreach (var intf in type.Interfaces)
+            {
+                if (intf.InterfaceType is GenericInstanceType git &&
+                   (git.Name.Contains("ICommandHandler") || git.Name.Contains("IRequestHandler")))
+                {
+                    var cmdArg = git.GenericArguments.FirstOrDefault();
+                    var resArg = git.GenericArguments.Skip(1).FirstOrDefault();
+
+                    bool isMatch = false;
+
+                    if (commandType != null && cmdArg != null && cmdArg.Name == commandType.Name)
+                        isMatch = true;
+                    else if (commandType == null && responseType != null && resArg != null && resArg.Name == responseType.Name)
+                        isMatch = true;
+
+                    if (isMatch)
+                    {
+                        return type.Methods.FirstOrDefault(m => m.Name == "Handle");
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
     // ─────────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────────
+
+    private bool IsFrameworkNoise(TypeReference? type)
+    {
+        if (type == null) return false;
+        var n = type.FullName ?? type.Name;
+        return n.StartsWith("System.", StringComparison.Ordinal) ||
+               n.StartsWith("Microsoft.", StringComparison.Ordinal) ||
+               n.Contains("AsyncTaskMethodBuilder", StringComparison.Ordinal) ||
+               n.Contains("IAsyncStateMachine", StringComparison.Ordinal) ||
+               n.Contains("ExecutionContext", StringComparison.Ordinal) ||
+               n.Contains("ThrowHelper", StringComparison.Ordinal) ||
+               n.Contains("TaskScheduler", StringComparison.Ordinal) ||
+               n.Contains("Thread", StringComparison.Ordinal);
+    }
+
+    private bool IsNoise(string typeName, string methodName) =>
+            typeName is "Object" or "String" or "Task" or "Console" ||
+            methodName is ".ctor" or "get_Result" or "GetAwaiter" or "ConfigureAwait" or "MoveNext" or "SetStateMachine";
+
     private string Categorize(string typeName, string methodName)
     {
         if (typeName.Contains("Mediator") || methodName.Contains("Send")) return "Mediator";
@@ -459,10 +519,11 @@ public class RichApiAnalyzer
         if (typeName.Contains("Controller")) return "Controller";
         return "Internal";
     }
+
     private string BuildSummary(string typeName, string methodName, MethodReference method)
     {
         if (methodName.Contains("Send") && typeName.Contains("Mediator"))
-            return $"Dispatches command/query via mediator (best-effort)";
+            return $"Dispatches command/query via mediator";
         if (methodName.StartsWith("Get")) return $"Retrieves data from {typeName}";
         if (methodName.StartsWith("Add") || methodName.StartsWith("Create"))
             return $"Creates new entity via {typeName}";
@@ -471,12 +532,11 @@ public class RichApiAnalyzer
             return $"Deletes entity via {typeName}";
         return $"Calls {typeName}.{methodName}";
     }
-    private bool IsNoise(string typeName, string methodName) =>
-            typeName is "Object" or "String" or "Task" or "Console" ||
-            methodName is ".ctor" or "get_Result" or "GetAwaiter" or "ConfigureAwait";
+
     private bool IsPrimitive(TypeReference t) =>
             t.Name is "String" or "Int32" or "Int64" or "Boolean" or
                       "Guid" or "DateTime" or "Decimal" or "Double" or "Single";
+
     private string FriendlyName(TypeReference t)
     {
         if (t is GenericInstanceType git)
