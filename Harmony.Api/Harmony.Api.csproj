@@ -12,7 +12,6 @@
 		<PackageReference Include="Keycloak.AuthServices.Authentication" Version="2.8.0" />
 	    <PackageReference Include="Cortex.Mediator" Version="3.1.2" />
 	    <PackageReference Include="Mapster" Version="7.4.0" />
-	    <PackageReference Include="RadenoorNuGets" Version="3.1.0" />
 	    <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
 	    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerGen" Version="10.1.4" />
 	    <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="10.1.4" />
@@ -23,6 +22,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+	  <ProjectReference Include="..\Daena.Core\Daena.Core.csproj" />
 	  <ProjectReference Include="..\Harmony.Application\Harmony.Application.csproj" />
 	</ItemGroup>
 

@@ -2,6 +2,9 @@
   <Folder Name="/Application/">
     <Project Path="Harmony.Api/Harmony.Api.csproj" />
   </Folder>
+  <Folder Name="/Daena/">
+    <Project Path="Daena.Core/Daena.Core.csproj" Id="b29a9c02-6a25-4225-ad9f-ca25ac624aa4" />
+  </Folder>
   <Folder Name="/Infrastructure/">
     <Project Path="Harmony.Application/Harmony.Application.csproj" Id="e2808675-691d-4928-86b3-1530c2a4d884" />
   </Folder>

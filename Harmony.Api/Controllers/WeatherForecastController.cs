@@ -1,6 +1,5 @@
 using Cortex.Mediator;
 using Harmony.Application.Contract.Requests;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Harmony.Api.Controllers;
@@ -14,4 +13,8 @@ public class WeatherForecastController : ControllerBase
     {
         _mediator = mediator;
     }
+
+    [HttpGet]
+    [Route("test")]
+    public async Task<IActionResult> Test(AddPostDto dto) => Ok(await _mediator.SendCommandAsync(dto));
 }
